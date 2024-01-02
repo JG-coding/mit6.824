@@ -1,0 +1,33 @@
+=== RUN   TestPersist12C
+Test (2C): basic persistence ...
+  ... Passed --   5.4  3  130   33369    6
+--- PASS: TestPersist12C (5.38s)
+=== RUN   TestPersist22C
+Test (2C): more persistence ...
+  ... Passed --  18.1  5 1496  344517   16
+--- PASS: TestPersist22C (18.12s)
+=== RUN   TestPersist32C
+Test (2C): partitioned leader and one follower crash, leader restarts ...
+  ... Passed --   2.5  3   44   11769    4
+--- PASS: TestPersist32C (2.48s)
+=== RUN   TestFigure82C
+Test (2C): Figure 8 ...
+  ... Passed --  33.7  5  748  168470   24
+--- PASS: TestFigure82C (33.69s)
+=== RUN   TestUnreliableAgree2C
+Test (2C): unreliable agreement ...
+  ... Passed --   2.6  5  224   84861  246
+--- PASS: TestUnreliableAgree2C (2.60s)
+=== RUN   TestFigure8Unreliable2C
+Test (2C): Figure 8 (unreliable) ...
+  ... Passed --  35.2  5 6992 17154819  279
+--- PASS: TestFigure8Unreliable2C (35.23s)
+=== RUN   TestReliableChurn2C
+Test (2C): churn ...
+  ... Passed --  16.1  5 4036 23136942 2266
+--- PASS: TestReliableChurn2C (16.09s)
+=== RUN   TestUnreliableChurn2C
+Test (2C): unreliable churn ...
+  ... Passed --  16.2  5 1068  920442  324
+--- PASS: TestUnreliableChurn2C (16.17s)
+PASS

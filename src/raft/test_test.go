@@ -721,6 +721,7 @@ func TestPersist12C(t *testing.T) {
 	cfg.one(12, servers, true)
 
 	leader1 := cfg.checkOneLeader()
+	DPrintf("---------当前集群内的leader为 %d--------------", leader1)
 	cfg.disconnect(leader1)
 	cfg.start1(leader1, cfg.applier)
 	cfg.connect(leader1)
@@ -1169,8 +1170,10 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 
 	cfg.begin(name)
 
-	cfg.one(rand.Int(), servers, true)
+	cfg.one(rand.Int(), servers, true) //就某个cmd先达成一致
+	DPrintf("---------------------------------------")
 	leader1 := cfg.checkOneLeader()
+	DPrintf("--------当前集群内的leader为: %d", leader1)
 
 	for i := 0; i < iters; i++ {
 		victim := (leader1 + 1) % servers
@@ -1182,15 +1185,19 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 
 		if disconnect {
 			cfg.disconnect(victim)
+			DPrintf("---------------------------------------")
+			DPrintf("集群内的节点: %d 下线啦", victim)
 			cfg.one(rand.Int(), servers-1, true)
 		}
 		if crash {
+			DPrintf("---------------------------------------")
 			cfg.crash1(victim)
+			DPrintf("集群内的节点: %d crash啦", victim)
 			cfg.one(rand.Int(), servers-1, true)
 		}
 
 		// perhaps send enough to get a snapshot
-		nn := (SnapShotInterval / 2) + (rand.Int() % SnapShotInterval)
+		nn := (SnapShotInterval / 2) + (rand.Int() % SnapShotInterval) //[5, 10]
 		for i := 0; i < nn; i++ {
 			cfg.rafts[sender].Start(rand.Int())
 		}
@@ -1205,7 +1212,7 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			cfg.one(rand.Int(), servers-1, true)
 		}
 
-		if cfg.LogSize() >= MAXLOGSIZE {
+		if cfg.LogSize() >= MAXLOGSIZE { //2000
 			cfg.t.Fatalf("Log size too large")
 		}
 		if disconnect {

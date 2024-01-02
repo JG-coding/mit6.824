@@ -359,7 +359,7 @@ func (cfg *config) cleanup() {
 // attach server i to the net.
 func (cfg *config) connect(i int) {
 	// fmt.Printf("connect(%d)\n", i)
-
+	DPrintf("----------node : %d 上线了-------------", i)
 	cfg.connected[i] = true
 
 	// outgoing ClientEnds
@@ -382,7 +382,7 @@ func (cfg *config) connect(i int) {
 // detach server i from the net.
 func (cfg *config) disconnect(i int) {
 	// fmt.Printf("disconnect(%d)\n", i)
-
+	DPrintf("----------node : %d 下线了-------------", i)
 	cfg.connected[i] = false
 
 	// outgoing ClientEnds
@@ -561,31 +561,31 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 	DPrintf("客户端提交command: %d 给服务器", cmd)
 	t0 := time.Now()
 	starts := 0
-	for time.Since(t0).Seconds() < 10 && cfg.checkFinished() == false {
+	for time.Since(t0).Seconds() < 10 && cfg.checkFinished() == false { //10s内
 		// try all the servers, maybe one is the leader.
 		index := -1
 		for si := 0; si < cfg.n; si++ {
 			starts = (starts + 1) % cfg.n
 			var rf *Raft
 			cfg.mu.Lock()
-			if cfg.connected[starts] {
+			if cfg.connected[starts] { //确保是在集群内的，这样才能就某个命令达成共识
 				rf = cfg.rafts[starts]
 			}
 			cfg.mu.Unlock()
 			if rf != nil {
-				index1, _, ok := rf.Start(cmd)
-				if ok {
+				index1, _, ok := rf.Start(cmd) //提交cmd给raft
+				if ok {                        //提交给的是leader
 					index = index1
 					break
 				}
 			}
 		}
 
-		if index != -1 {
+		if index != -1 { //提交cmd成功，说明集群内存在leader
 			// somebody claimed to be the leader and to have
 			// submitted our command; wait a while for agreement.
 			t1 := time.Now()
-			for time.Since(t1).Seconds() < 2 {
+			for time.Since(t1).Seconds() < 2 { //等待2s让cmd在集群内达成一致
 				nd, cmd1 := cfg.nCommitted(index)
 				if nd > 0 && nd >= expectedServers {
 					// committed
@@ -600,10 +600,10 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 				cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 			}
 		} else {
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(50 * time.Millisecond) //集群内还没有选出leader，睡眠50ms，再次尝试
 		}
 	}
-	if cfg.checkFinished() == false {
+	if cfg.checkFinished() == false { //10s内都没有选出leader来
 		cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 	}
 	return -1
