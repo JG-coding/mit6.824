@@ -1199,6 +1199,7 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 		// perhaps send enough to get a snapshot
 		nn := (SnapShotInterval / 2) + (rand.Int() % SnapShotInterval) //[5, 10]
 		for i := 0; i < nn; i++ {
+			DPrintf("------------nn : %d-------------", nn)
 			cfg.rafts[sender].Start(rand.Int())
 		}
 
@@ -1209,7 +1210,9 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			// TestSnapshotBasic2D().
 			cfg.one(rand.Int(), servers, true)
 		} else {
+			DPrintf("------make sure all followers----------------")
 			cfg.one(rand.Int(), servers-1, true)
+			DPrintf("------make sure all followers finish----------------")
 		}
 
 		if cfg.LogSize() >= MAXLOGSIZE { //2000
@@ -1218,9 +1221,11 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 		if disconnect {
 			// reconnect a follower, who maybe behind and
 			// needs to rceive a snapshot to catch up.
+			DPrintf("---reconnect a follower, who maybe behind and----")
 			cfg.connect(victim)
 			cfg.one(rand.Int(), servers, true)
 			leader1 = cfg.checkOneLeader()
+			DPrintf("---reconnect a follower, who maybe behind and finish----")
 		}
 		if crash {
 			cfg.start1(victim, cfg.applierSnap)

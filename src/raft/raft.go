@@ -21,6 +21,7 @@ import (
 	"6.5840/labgob"
 	"bytes"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -100,6 +101,7 @@ type Raft struct {
 
 	//用于通知apply携程应用
 	conditional *sync.Cond
+	applyCh     chan ApplyMsg
 }
 
 // GetState return currentTerm and whether this server
@@ -142,7 +144,7 @@ func (rf *Raft) persist() {
 	e.Encode(rf.LastIncludeTerm)
 	e.Encode(rf.log)
 	raftstate := w.Bytes()
-	rf.persister.Save(raftstate, nil)
+	rf.persister.Save(raftstate, rf.persister.snapshot)
 	DPrintf("RaftNode[%d], term: %d 调用persist(), command: %v", rf.me, rf.currentTerm, rf.log)
 }
 
@@ -176,6 +178,11 @@ func (rf *Raft) readPersist(data []byte) {
 	rf.votedFor = voteFor
 	rf.LastIncludedIndex = lastIncludeIndex
 	rf.LastIncludeTerm = lastIncludeTerm
+
+	//引入snapshot后,committed,lastApplied可修改成
+	rf.commitIndex = rf.LastIncludedIndex
+	rf.lastApplied = rf.LastIncludedIndex
+
 	d.Decode(&rf.log)
 	DPrintf("RaftNode[%d], term: %d 调用readPersist(), command: %v", rf.me, rf.currentTerm, rf.log)
 }
@@ -209,7 +216,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		logs := LogEntry{Index: rf.getLastLogIndex() + 1, Command: command, Term: rf.currentTerm}
 		rf.log = append(rf.log, logs)
 		rf.persist()
-		DPrintf("RaftNode[%d], term: %d, 收到客户端追加日志，当前日志长度为: %d", rf.me, rf.currentTerm, len(rf.log))
+		DPrintf("RaftNode[%d], term: %d, 收到客户端追加日志command : %v，当前日志长度为: %d", rf.me, rf.currentTerm, command, len(rf.log))
 		DPrintf("RaftNode[%d] 被客户端追加日志后：term: %d, votefor: %d, logs: %v", rf.me, rf.currentTerm, rf.votedFor, rf.log)
 		index = rf.getLastLogIndex()
 		rf.timeout = time.Duration(0) * time.Millisecond
@@ -239,17 +246,30 @@ func (rf *Raft) killed() bool {
 
 // 获取最后一个日志的Index
 func (rf *Raft) getLastLogIndex() int {
+	//可能所有日志都被打快照了
+	if rf.getLogLength() == 1 {
+		return rf.LastIncludedIndex
+	}
 	return rf.log[len(rf.log)-1].Index
 }
 
 // 获取最后一个日志的Term
 func (rf *Raft) getLastLogTerm() int {
+	//可能所有日志都被打快照了
+	if rf.getLogLength() == 1 {
+		return rf.LastIncludeTerm
+	}
 	return rf.log[rf.getLogLength()-1].Term
 }
 
 // 获取日志长度
 func (rf *Raft) getLogLength() int {
 	return len(rf.log)
+}
+
+// 包括快照的所有日志长度
+func (rf *Raft) getAbsoluteLogLength() int {
+	return rf.LastIncludedIndex + len(rf.log)
 }
 
 func (rf *Raft) constructRequestVoteArgs(args *RequestVoteArgs) {
@@ -264,14 +284,45 @@ func (rf *Raft) constructAppendEntriesArgs(args *AppendEntriesArgs, i int) {
 	args.Term = rf.currentTerm
 	args.Entries = nil
 	//fmt.Println("rf.nextIndex[", i, "] is ", rf.nextIndex[i])
-	DPrintf("RaftNode[%d], term: %d, 构造AppendEntries给 RaftNode[%d]，其 nextIndex[%d]为: %d", rf.me, rf.currentTerm, i, i, rf.nextIndex[i])
+	DPrintf("RaftNode[%d], term: %d, 构造AppendEntries给 RaftNode[%d]，其 nextIndex[%d]为: %d,其lastIncludeIndex为 %d", rf.me, rf.currentTerm, i, i, rf.nextIndex[i], rf.LastIncludedIndex)
 
-	//snapshot
-	args.Entries = append(args.Entries, rf.log[rf.afterSnapshotIndex(rf.nextIndex[i]):]...)
-	args.LeaderCommit = rf.commitIndex
-	args.LeaderId = rf.me
-	args.PrevLogIndex = rf.nextIndex[i] - 1
-	args.PrevLogTerm = rf.log[rf.afterSnapshotIndex(args.PrevLogIndex)].Term
+	//snapshot   需要发送installSnapshot
+	if rf.nextIndex[i] <= rf.LastIncludedIndex {
+		var snapshotArgs InstallSnapshotArgs
+		snapshotArgs.Term = rf.currentTerm
+		snapshotArgs.Data = clone(rf.persister.ReadSnapshot())
+		snapshotArgs.LastIncludeTerm = rf.LastIncludeTerm
+		snapshotArgs.LastIncludedIndex = rf.LastIncludedIndex
+		snapshotArgs.LeaderId = rf.me
+		DPrintf("RaftNode[%d], term: %d call constructAppendEntriesArgs the args.data is %v to RaftNode[%d], rf.persister.ReadSnapshot() is %v", rf.me, rf.currentTerm, snapshotArgs.Data, i, rf.persister.ReadSnapshot())
+		//发送rpc
+		go rf.installSnapshotSender(i, snapshotArgs)
+
+		args.LeaderId = rf.me
+		args.LeaderCommit = rf.commitIndex
+		args.Term = rf.currentTerm
+		args.PrevLogIndex = rf.LastIncludedIndex
+		args.PrevLogTerm = rf.LastIncludeTerm
+		if rf.getLogLength() == 1 {
+			//发空包---因为都通过快照了
+			args.Entries = append(args.Entries, rf.log[(rf.getLogLength()):]...)
+		} else {
+			args.Entries = append(args.Entries, rf.log[rf.afterSnapshotIndex(rf.LastIncludedIndex+1):]...)
+		}
+	} else {
+		args.Term = rf.currentTerm
+		args.LeaderCommit = rf.commitIndex
+		args.LeaderId = rf.me
+		args.Entries = append(args.Entries, rf.log[rf.afterSnapshotIndex(rf.nextIndex[i]):]...)
+		if rf.afterSnapshotIndex(rf.nextIndex[i]) > 1 {
+			args.PrevLogIndex = rf.nextIndex[i] - 1
+			args.PrevLogTerm = rf.log[rf.afterSnapshotIndex(args.PrevLogIndex)].Term
+		} else {
+			args.PrevLogIndex = rf.LastIncludedIndex
+			args.PrevLogTerm = rf.LastIncludeTerm
+		}
+	}
+
 }
 
 func (rf *Raft) ticker() {
@@ -283,24 +334,35 @@ func (rf *Raft) ticker() {
 	}
 }
 
-func (rf *Raft) applyTicker(applyCh chan ApplyMsg) {
+func (rf *Raft) applyTicker() {
 	for rf.killed() == false {
 		func() {
 			rf.mu.Lock()
 			for rf.lastApplied >= rf.commitIndex {
 				rf.conditional.Wait()
 			}
+			firstIndex := rf.afterSnapshotIndex(rf.lastApplied + 1)
+			endIndex := rf.afterSnapshotIndex(rf.commitIndex + 1)
+			commitIndex := rf.commitIndex
+			lastApplied := rf.lastApplied
+			entries := make([]LogEntry, commitIndex-lastApplied)
+			copy(entries, rf.log[firstIndex:endIndex])
+			DPrintf("RaftNode[%d], term: %d apply entry, the firstIndex is %d, the endIndex is %d", rf.me, rf.currentTerm, firstIndex, endIndex)
+			rf.mu.Unlock()
+			for _, entry := range entries {
+				apply := ApplyMsg{
+					CommandValid: true,
+					Command:      entry.Command,
+					CommandIndex: entry.Index}
+				rf.applyCh <- apply
+				DPrintf("RaftNode[%d], term: %d apply entry: %v", rf.me, rf.currentTerm, apply)
+			}
 
-			rf.lastApplied++
-			index := rf.afterSnapshotIndex(rf.lastApplied)
-			DPrintf("RaftNode[%d], term: %d apply command: CommandIndex: %d", rf.me, rf.currentTerm, rf.lastApplied)
-			apply := ApplyMsg{
-				CommandValid: true,
-				Command:      rf.log[index].Command,
-				CommandIndex: rf.log[index].Index}
-			rf.mu.Unlock() //释放锁防止下面阻塞带着锁
-			applyCh <- apply
-			return
+			//全部发送完后检查 commitIndex(发送前的大小) 与 当前rf.lastApplied大小的关系
+			//防止：该raft被调用了InstallSnapshot后rf.lastApplied变的更大，而造成当前更小的commitIndex覆盖掉了
+			rf.mu.Lock()
+			rf.lastApplied = int(math.Max(float64(commitIndex), float64(rf.lastApplied)))
+			rf.mu.Unlock()
 		}()
 	}
 }
@@ -320,7 +382,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
-
+	rf.applyCh = applyCh
 	// Your initialization code here (2A, 2B, 2C).
 	rf.initializeRaft()
 
@@ -332,7 +394,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.ticker()
 
 	//定期检查有无需要apply的日志
-	go rf.applyTicker(applyCh)
+	go rf.applyTicker()
 
 	return rf
 }
@@ -380,8 +442,11 @@ func (rf *Raft) toBeLeader() {
 }
 
 func (rf *Raft) afterSnapshotIndex(index int) int {
+	if index == 0 {
+		return 0
+	}
 	if index-rf.LastIncludedIndex < 0 {
-		DPrintf("error: index : %d < LastIncludedIndex : %d", index, rf.LastIncludedIndex)
+		DPrintf("RaftNode[%d], term: %d : error: index : %d < LastIncludedIndex : %d", rf.me, rf.currentTerm, index, rf.LastIncludedIndex)
 		return -1
 	}
 	return index - rf.LastIncludedIndex

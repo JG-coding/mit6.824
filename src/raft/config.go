@@ -185,6 +185,7 @@ func (cfg *config) applier(i int, applyCh chan ApplyMsg) {
 
 // returns "" or error string
 func (cfg *config) ingestSnap(i int, snapshot []byte, index int) string {
+	DPrintf("----RaftNode[%d] call ingestSnap, snapshotIndex:%d--------", i, index)
 	if snapshot == nil {
 		log.Fatalf("nil snapshot")
 		return "nil snapshot"
@@ -210,7 +211,7 @@ func (cfg *config) ingestSnap(i int, snapshot []byte, index int) string {
 	return ""
 }
 
-const SnapShotInterval = 10
+const SnapShotInterval = 10 //10s做一次快照
 
 // periodically snapshot raft state
 func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
@@ -576,6 +577,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 				index1, _, ok := rf.Start(cmd) //提交cmd给raft
 				if ok {                        //提交给的是leader
 					index = index1
+					DPrintf("one func: rf.Start(cmd), get index1: %d, node:%d , the cmd is %v", index1, rf.me, cmd)
 					break
 				}
 			}
@@ -585,9 +587,11 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			// somebody claimed to be the leader and to have
 			// submitted our command; wait a while for agreement.
 			t1 := time.Now()
+			DPrintf("---------集群内存在leader,leader为 %d, 等待2s让cmd达成一致----------", index)
 			for time.Since(t1).Seconds() < 2 { //等待2s让cmd在集群内达成一致
 				nd, cmd1 := cfg.nCommitted(index)
 				if nd > 0 && nd >= expectedServers {
+					DPrintf("cmd is %v, cmd1 is %v", cmd, cmd1)
 					// committed
 					if cmd1 == cmd {
 						// and it was the command we submitted.
@@ -600,10 +604,12 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 				cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 			}
 		} else {
+			DPrintf("---------集群内暂时不存在leader,等待50ms----------")
 			time.Sleep(50 * time.Millisecond) //集群内还没有选出leader，睡眠50ms，再次尝试
 		}
 	}
 	if cfg.checkFinished() == false { //10s内都没有选出leader来
+		DPrintf("-------10s内未选出leader----------")
 		cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 	}
 	return -1

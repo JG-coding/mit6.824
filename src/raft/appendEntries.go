@@ -72,33 +72,66 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.ConflictTerm = -1
 		DPrintf("AppendEntries： RaftNode[%d], term: %d 的LastLogIndex:%d,  leader RaftNode[%d], term: %d 的PrevLogIndex: %d，不一致，设置reply.ConflictTerm=-1， reply.ConflictIndex: %d", rf.me, rf.currentTerm, rf.getLastLogIndex(), args.LeaderId, args.Term, args.PrevLogIndex, reply.ConflictIndex)
 		return
-	}
-	if rf.log[rf.afterSnapshotIndex(args.PrevLogIndex)].Term != args.PrevLogTerm {
-		reply.ConflictTerm = rf.log[rf.afterSnapshotIndex(args.PrevLogIndex)].Term
-		//倒着寻找到日志中为ConflictTerm的第一个日志
-		firstConfictTermLogIndex := args.PrevLogIndex
-
-		if reply.ConflictTerm == 0 {
-			reply.ConflictIndex = 0
-			return
-		}
-
-		//i从 args.PrevLogIndex 开启寻找即可
-		for i := rf.afterSnapshotIndex(args.PrevLogIndex); i >= 1; i-- {
-			//找到最小index的日志为ConflictTerm的日志索引
-			if rf.log[i].Term == reply.ConflictTerm {
-				firstConfictTermLogIndex = rf.log[i].Index
-				continue
-			} else {
-				break
+	} else {
+		//有快照的情况下
+		if rf.LastIncludedIndex > 0 {
+			if args.PrevLogIndex < rf.LastIncludedIndex {
+				reply.ConflictIndex = rf.LastIncludedIndex + 1
+				reply.ConflictTerm = -1
+				return
+			} else if args.PrevLogIndex > rf.LastIncludedIndex {
+				if rf.log[rf.afterSnapshotIndex(args.PrevLogIndex)].Term != args.PrevLogTerm {
+					reply.ConflictTerm = rf.log[rf.afterSnapshotIndex(args.PrevLogIndex)].Term
+					//倒着寻找到日志中为ConflictTerm的第一个日志
+					firstConfictTermLogIndex := args.PrevLogIndex
+					//i从 args.PrevLogIndex 开启寻找即可
+					for i := rf.afterSnapshotIndex(args.PrevLogIndex); i >= 1; i-- {
+						//找到最小index的日志为ConflictTerm的日志索引
+						if rf.log[i].Term == reply.ConflictTerm {
+							firstConfictTermLogIndex = rf.log[i].Index
+							continue
+						} else {
+							break
+						}
+					}
+					reply.ConflictIndex = firstConfictTermLogIndex
+					DPrintf("RaftNode[%d], term: %d LastLogTerm:%d,  leader RaftNode[%d], term: %d PrevLogTerm: %d，不一致", rf.me, rf.currentTerm, rf.log[rf.afterSnapshotIndex(rf.getLastLogIndex())].Term, args.LeaderId, args.Term, args.PrevLogTerm)
+					DPrintf("RaftNode[%d] 被leader :%d 追加日志失败：term: %d, votefor: %d, logs: %v", rf.me, args.LeaderId, rf.currentTerm, rf.votedFor, rf.log)
+					DPrintf("RaftNode[%d] 返回给leader： %d 的conflictIndex: %d,  conflictTerm: %d", rf.me, args.LeaderId, reply.ConflictIndex, reply.ConflictTerm)
+					return
+				}
 			}
 		}
+		//没有快照下
+		if rf.LastIncludedIndex == 0 {
+			if rf.log[rf.afterSnapshotIndex(args.PrevLogIndex)].Term != args.PrevLogTerm {
+				reply.ConflictTerm = rf.log[rf.afterSnapshotIndex(args.PrevLogIndex)].Term
+				//倒着寻找到日志中为ConflictTerm的第一个日志
+				firstConfictTermLogIndex := args.PrevLogIndex
 
-		reply.ConflictIndex = firstConfictTermLogIndex
-		DPrintf("RaftNode[%d], term: %d LastLogTerm:%d,  leader RaftNode[%d], term: %d PrevLogTerm: %d，不一致", rf.me, rf.currentTerm, rf.log[rf.getLastLogIndex()].Term, args.LeaderId, args.Term, args.PrevLogTerm)
-		DPrintf("RaftNode[%d] 被leader :%d 追加日志失败：term: %d, votefor: %d, logs: %v", rf.me, args.LeaderId, rf.currentTerm, rf.votedFor, rf.log)
-		DPrintf("RaftNode[%d] 返回给leader： %d 的conflictIndex: %d,  conflictTerm: %d", rf.me, args.LeaderId, reply.ConflictIndex, reply.ConflictTerm)
-		return
+				if reply.ConflictTerm == 0 {
+					reply.ConflictIndex = 0
+					return
+				}
+
+				//i从 args.PrevLogIndex 开启寻找即可
+				for i := rf.afterSnapshotIndex(args.PrevLogIndex); i >= 1; i-- {
+					//找到最小index的日志为ConflictTerm的日志索引
+					if rf.log[i].Term == reply.ConflictTerm {
+						firstConfictTermLogIndex = rf.log[i].Index
+						continue
+					} else {
+						break
+					}
+				}
+
+				reply.ConflictIndex = firstConfictTermLogIndex
+				DPrintf("RaftNode[%d], term: %d LastLogTerm:%d,  leader RaftNode[%d], term: %d PrevLogTerm: %d，不一致", rf.me, rf.currentTerm, rf.log[rf.afterSnapshotIndex(rf.getLastLogIndex())].Term, args.LeaderId, args.Term, args.PrevLogTerm)
+				DPrintf("RaftNode[%d] 被leader :%d 追加日志失败：term: %d, votefor: %d, logs: %v", rf.me, args.LeaderId, rf.currentTerm, rf.votedFor, rf.log)
+				DPrintf("RaftNode[%d] 返回给leader： %d 的conflictIndex: %d,  conflictTerm: %d", rf.me, args.LeaderId, reply.ConflictIndex, reply.ConflictTerm)
+				return
+			}
+		}
 	}
 
 	//一致性检查成功
@@ -225,31 +258,51 @@ func (rf *Raft) leaderTicker() {
 									rf.nextIndex[i] = reply.ConflictIndex
 									DPrintf("RaftNode[%d], term: %d 追加给RaftNode[%d], term: %d 失败, 原因是一致性检查失败，reply.ConflictTerm[]为-1,即对面日志比较短，conflictIndex为：%d", rf.me, rf.currentTerm, i, reply.Term, reply.ConflictIndex)
 								} else {
-									//此种情况说明： 对面的日志 >= 我们
-									//寻找ConflictTerm该任期下的最后一个日志
-									rf.nextIndex[i] = reply.ConflictIndex
-									DPrintf("RaftNode[%d], term: %d 追加给RaftNode[%d], term: %d 失败, 原因是一致性检查失败，nextIndex[%d]初始化为: %d ", rf.me, rf.currentTerm, i, reply.Term, i, rf.nextIndex[i])
-									//该情况下不可能找的到
-									if reply.ConflictTerm > rf.currentTerm {
-										DPrintf("RaftNode[%d], term: %d 追加给RaftNode[%d], term: %d 失败, 原因是一致性检查失败，reply.ConflictTerm: %d > rf.currentTerm : %d", rf.me, rf.currentTerm, i, reply.Term, reply.ConflictTerm, rf.currentTerm)
-										return
-									} else {
-										DPrintf("RaftNode[%d], term: %d 追加给RaftNode[%d], term: %d 失败, 原因是一致性检查失败，reply.ConflictTerm: %d <= rf.currentTerm : %d", rf.me, rf.currentTerm, i, reply.Term, reply.ConflictTerm, rf.currentTerm)
-										//正着找
-										for j := 0; j <= args.PrevLogIndex; j++ {
-											index := rf.afterSnapshotIndex(j)
-											if rf.log[index].Term == reply.ConflictTerm {
-												for j <= args.PrevLogIndex && rf.log[index].Term == reply.ConflictTerm {
-													j++
-													index = rf.afterSnapshotIndex(j)
+									//无快照情况下:
+									if rf.LastIncludedIndex == 0 {
+										//此种情况说明： 对面的日志 >= 我们
+										//寻找ConflictTerm该任期下的最后一个日志
+										rf.nextIndex[i] = reply.ConflictIndex
+										DPrintf("RaftNode[%d], term: %d 追加给RaftNode[%d], term: %d 失败, 原因是一致性检查失败，nextIndex[%d]初始化为: %d ", rf.me, rf.currentTerm, i, reply.Term, i, rf.nextIndex[i])
+										//该情况下不可能找的到
+										if reply.ConflictTerm > rf.currentTerm {
+											DPrintf("RaftNode[%d], term: %d 追加给RaftNode[%d], term: %d 失败, 原因是一致性检查失败，reply.ConflictTerm: %d > rf.currentTerm : %d", rf.me, rf.currentTerm, i, reply.Term, reply.ConflictTerm, rf.currentTerm)
+											return
+										} else {
+											DPrintf("RaftNode[%d], term: %d 追加给RaftNode[%d], term: %d 失败, 原因是一致性检查失败，reply.ConflictTerm: %d <= rf.currentTerm : %d", rf.me, rf.currentTerm, i, reply.Term, reply.ConflictTerm, rf.currentTerm)
+											//正着找
+											DPrintf("RaftNode[%d], term: %d args.PrevLogIndex: %d, lastIncludeIndex: %d", rf.me, rf.currentTerm, args.PrevLogIndex, rf.LastIncludedIndex)
+											for j := 0; j <= args.PrevLogIndex; j++ {
+												if rf.log[j].Term == reply.ConflictTerm {
+													for j <= args.PrevLogIndex && rf.log[j].Term == reply.ConflictTerm {
+														if j+1 < len(rf.log) {
+															j++
+														}
+													}
+													rf.nextIndex[i] = j
+													break
 												}
-												rf.nextIndex[i] = j
+											}
+
+											DPrintf("RaftNode[%d], term: %d 正着找node: %d 的ConflictTerm: %d 的最后一个该term的下一个位置: %d ", rf.me, rf.currentTerm, i, reply.ConflictTerm, rf.nextIndex[i])
+										}
+									} else {
+										//有快照下的处理
+										rf.nextIndex[i] = reply.ConflictIndex
+										for index := 0; index <= len(rf.log)-1; index++ {
+											if rf.log[index].Term == reply.ConflictTerm {
+												for index <= len(rf.log)-1 && rf.log[index].Term == reply.ConflictTerm {
+													if index+1 < len(rf.log) {
+														index++
+													}
+												}
+												rf.nextIndex[i] = index + rf.LastIncludedIndex
 												break
 											}
 										}
-
 										DPrintf("RaftNode[%d], term: %d 正着找node: %d 的ConflictTerm: %d 的最后一个该term的下一个位置: %d ", rf.me, rf.currentTerm, i, reply.ConflictTerm, rf.nextIndex[i])
 									}
+
 								}
 								DPrintf("RaftNode[%d], term: %d, 追加失败后的nextIndex[%d]: %d, matchIndex[%d]: %d", rf.me, rf.currentTerm, i, rf.nextIndex[i], i, rf.matchIndex[i])
 							} else {
@@ -262,7 +315,7 @@ func (rf *Raft) leaderTicker() {
 								//看看是否可以更新commitIndex
 								//创建matchIndex的副本
 								sortedMatchIndex := make([]int, 0)
-								sortedMatchIndex = append(sortedMatchIndex, len(rf.log))
+								//sortedMatchIndex = append(sortedMatchIndex, rf.getLastLogIndex())
 								for i := 0; i < len(rf.peers); i++ {
 									if i == rf.me {
 										continue
@@ -274,15 +327,18 @@ func (rf *Raft) leaderTicker() {
 								//取其中位数
 								midIndex := sortedMatchIndex[len(rf.peers)/2]
 
+								//一般不会出现这种情况
+								if midIndex <= rf.LastIncludedIndex {
+									return
+								}
+
 								//snapshot后：
 								index := rf.afterSnapshotIndex(midIndex)
-
+								DPrintf("RaftNode[%d], term: %d 对matchIndex求得中位数为: %d, 在日志中的下标为: %d, lastIncludeIndex: %d", rf.me, rf.currentTerm, midIndex, index, rf.LastIncludedIndex)
 								//延迟提交检查：rf.log[midIndex].Term == rf.currentTerm
 								if midIndex > rf.commitIndex && rf.log[index].Term == rf.currentTerm {
 									DPrintf("RaftNode[%d], term: %d 延迟提交检查成功，midIndex: %d, commitIndex: %d, rf.log[midIndex].Term: %d", rf.me, rf.currentTerm, midIndex, rf.commitIndex, rf.log[index].Term)
 									rf.commitIndex = midIndex
-								} else {
-									DPrintf("RaftNode[%d], term: %d 延迟提交检查不成功，midIndex: %d, commitIndex: %d, rf.log[midIndex].Term: %d", rf.me, rf.currentTerm, midIndex, rf.commitIndex, rf.log[index].Term)
 								}
 								//看看是否需要apply
 								if rf.lastApplied < rf.commitIndex {
