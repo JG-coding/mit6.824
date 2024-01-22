@@ -165,6 +165,7 @@ func (cfg *config) All() []int {
 func (cfg *config) ConnectAll() {
 	cfg.mu.Lock()
 	defer cfg.mu.Unlock()
+	DPrintf("------所有节点重新连接到同一个集群---------")
 	for i := 0; i < cfg.n; i++ {
 		cfg.connectUnlocked(i, cfg.All())
 	}

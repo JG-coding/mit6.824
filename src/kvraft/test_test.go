@@ -485,8 +485,8 @@ func TestOnePartition3A(t *testing.T) {
 	Put(cfg, ck, "1", "13", nil, -1)
 
 	cfg.begin("Test: progress in majority (3A)")
-
-	p1, p2 := cfg.make_partition()
+	DPrintf("---Test: progress in majority (3A)--------")
+	p1, p2 := cfg.make_partition() //划分为两个分区，并将leader划在少数分区处
 	cfg.partition(p1, p2)
 
 	ckp1 := cfg.makeClient(p1)  // connect ckp1 to p1
@@ -502,6 +502,7 @@ func TestOnePartition3A(t *testing.T) {
 	done1 := make(chan bool)
 
 	cfg.begin("Test: no progress in minority (3A)")
+	DPrintf("---Test: no progress in minority (3A)--------")
 	go func() {
 		Put(cfg, ckp2a, "1", "15", nil, -1)
 		done0 <- true
@@ -526,6 +527,7 @@ func TestOnePartition3A(t *testing.T) {
 	cfg.end()
 
 	cfg.begin("Test: completion after heal (3A)")
+	DPrintf("---Test: completion after heal (3A)--------")
 
 	cfg.ConnectAll()
 	cfg.ConnectClient(ckp2a, cfg.All())

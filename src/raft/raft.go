@@ -62,6 +62,7 @@ type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
+	CommandTerm  int //用于lab3中判断该服务器由于网络分区是否已经不是leader
 
 	// For 2D:
 	SnapshotValid bool
@@ -220,6 +221,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		DPrintf("RaftNode[%d] 被客户端追加日志后：term: %d, votefor: %d, logs: %v", rf.me, rf.currentTerm, rf.votedFor, rf.log)
 		index = rf.getLastLogIndex()
 		rf.timeout = time.Duration(0) * time.Millisecond
+		//fmt.Println("the leader is", rf.me, "term is", rf.currentTerm)
 	}
 
 	return index, term, isLeader
@@ -345,6 +347,7 @@ func (rf *Raft) applyTicker() {
 			endIndex := rf.afterSnapshotIndex(rf.commitIndex + 1)
 			commitIndex := rf.commitIndex
 			lastApplied := rf.lastApplied
+			term := rf.currentTerm
 			entries := make([]LogEntry, commitIndex-lastApplied)
 			copy(entries, rf.log[firstIndex:endIndex])
 			DPrintf("RaftNode[%d], term: %d apply entry, the firstIndex is %d, the endIndex is %d", rf.me, rf.currentTerm, firstIndex, endIndex)
@@ -353,7 +356,8 @@ func (rf *Raft) applyTicker() {
 				apply := ApplyMsg{
 					CommandValid: true,
 					Command:      entry.Command,
-					CommandIndex: entry.Index}
+					CommandIndex: entry.Index,
+					CommandTerm:  term}
 				rf.applyCh <- apply
 				DPrintf("RaftNode[%d], term: %d apply entry: %v", rf.me, rf.currentTerm, apply)
 			}
@@ -450,4 +454,13 @@ func (rf *Raft) afterSnapshotIndex(index int) int {
 		return -1
 	}
 	return index - rf.LastIncludedIndex
+}
+
+// lab3 need
+func (rf *Raft) GetPersistSize() int {
+	return rf.persister.RaftStateSize()
+}
+
+func (rf *Raft) GetSnapshot() []byte {
+	return rf.persister.ReadSnapshot()
 }
